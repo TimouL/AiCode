@@ -424,9 +424,8 @@ fun RemoteServerScreen(
                     }
                     showAddMountDialog = false
                 },
-                onListDirectories = { connectionId, path, onResult ->
-                    viewModel.listRemoteDirectories(connectionId, path, onResult)
-                }
+                onListDirectories = viewModel::listRemoteDirectories,
+                onCreateDirectory = viewModel::createRemoteDirectory
             )
         }
     }

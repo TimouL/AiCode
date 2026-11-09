@@ -22,6 +22,10 @@ import com.aicode.feature.workspace.domain.model.RemoteProtocol
 import com.aicode.feature.workspace.domain.model.SyncConnectionState
 import com.aicode.feature.workspace.domain.remote.RemoteAuth
 import com.aicode.feature.workspace.domain.remote.RemoteSyncClient
+import com.aicode.feature.workspace.domain.remote.InvalidRemoteDirectoryNameException
+import com.aicode.feature.workspace.domain.remote.RemoteDirectoryNames
+import com.aicode.feature.workspace.domain.remote.createChildDirectory
+import com.aicode.feature.workspace.domain.remote.withConnection
 import com.aicode.feature.workspace.domain.remote.SyncEngine
 import com.aicode.feature.workspace.domain.remote.SyncIndexStore
 import com.aicode.feature.workspace.domain.remote.ftp.FtpSyncClient
@@ -440,21 +444,33 @@ class RemoteRepository @Inject constructor(
         }
     }
 
-    suspend fun listRemoteDirectories(connectionId: String, path: String): Result<List<String>> = withContext(Dispatchers.IO) {
+    suspend fun listRemoteDirectories(connectionId: String, path: String): Result<List<String>> =
+        withDirectoryConnection(connectionId) {
+            listFiles(path).filter { it.isDirectory && it.name != "." && it.name != ".." }.map { it.name }
+        }
+
+    suspend fun createRemoteDirectory(connectionId: String, parentPath: String, name: String): Result<String> {
+        if (!RemoteDirectoryNames.isValid(name)) return Result.failure(InvalidRemoteDirectoryNameException())
+        return withDirectoryConnection(connectionId) { createChildDirectory(parentPath, name) }
+    }
+
+    private suspend fun <T> withDirectoryConnection(
+        connectionId: String,
+        operation: suspend RemoteSyncClient.() -> T
+    ): Result<T> = withContext(Dispatchers.IO) {
         try {
             val connEntity = dao.getConnectionById(connectionId) ?: return@withContext Result.failure(Exception("Connection not found"))
             val conn = connEntity.toDomainModel()
-            
+
             val client = when (conn.protocol) {
                 RemoteProtocol.SFTP -> SftpSyncClient(hostKeyVerifier, privateKeyStore)
                 RemoteProtocol.FTP -> FtpSyncClient()
             }
             val auth = resolveAuth(connEntity)
-            
-            client.connect(conn.host, conn.port, conn.username, auth)
-            val files = client.listFiles(path).filter { it.isDirectory }.map { it.name }
-            client.disconnect()
-            Result.success(files)
+
+            Result.success(client.withConnection(conn.host, conn.port, conn.username, auth, operation))
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Result.failure(e)
         }

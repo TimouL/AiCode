@@ -1579,6 +1579,14 @@
     <string name="remote_load_failed">加载失败：%1$s</string>
     <string name="remote_parent_dir">.. (上一级)</string>
     <string name="remote_confirm_select">确认选择</string>
+    <string name="remote_create_dir">新建目录</string>
+    <string name="remote_directory_name">目录名称</string>
+    <string name="remote_directory_name_invalid">请输入有效的单级目录名称，不能使用 .、..，也不能包含路径分隔符或控制字符。</string>
+    <string name="remote_create_dir_path">创建位置：%1$s</string>
+    <string name="remote_creating_dir">正在创建…</string>
+    <string name="remote_create_dir_failed">创建失败：%1$s</string>
+    <string name="remote_directory_already_exists">已存在同名文件或目录，请更换名称。</string>
+    <string name="remote_empty_dir">此目录下暂无子目录</string>
 
     <!-- Remote FTP -->
     <string name="ftp_usage_title">使用说明</string>

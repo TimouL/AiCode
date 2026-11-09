@@ -9,6 +9,8 @@ interface RemoteSyncClient {
     suspend fun downloadFile(remotePath: String, localPath: String)
     suspend fun uploadFile(localPath: String, remotePath: String)
     suspend fun createDirectory(remotePath: String)
+    /** 创建一个目录：父目录必须存在，目标已存在或服务端拒绝时必须抛出异常。 */
+    suspend fun createDirectoryExclusive(remotePath: String)
     suspend fun delete(remotePath: String)
     suspend fun isConnected(): Boolean
 

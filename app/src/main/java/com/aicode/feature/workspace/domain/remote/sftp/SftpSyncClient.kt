@@ -46,7 +46,10 @@ class SftpSyncClient(
         }
 
     private fun doConnect(host: String, port: Int, username: String, auth: RemoteAuth) {
-        sshClient = SSHClient().apply {
+        // 先持有客户端，连接/认证中途失败时调用方也能通过 disconnect 释放它。
+        val ssh = SSHClient()
+        sshClient = ssh
+        ssh.apply {
             setConnectTimeout(CONNECT_TIMEOUT_MS)
             setTimeout(READ_TIMEOUT_MS)
             addHostKeyVerifier(hostKeyVerifier)
@@ -110,6 +113,14 @@ class SftpSyncClient(
             mutex.withLock {
                 val sftp = sftpClient ?: throw IllegalStateException("SFTP Client is not connected")
                 sftp.mkdirs(remotePath)
+            }
+        }
+
+    override suspend fun createDirectoryExclusive(remotePath: String) =
+        withContext(Dispatchers.IO) {
+            mutex.withLock {
+                val sftp = sftpClient ?: throw IllegalStateException("SFTP Client is not connected")
+                sftp.mkdir(remotePath)
             }
         }
 

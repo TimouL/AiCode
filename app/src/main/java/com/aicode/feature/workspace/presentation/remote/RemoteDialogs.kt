@@ -42,11 +42,14 @@ import com.aicode.feature.workspace.domain.UriPathResolver
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import com.aicode.core.ui.AppTextField
+import com.aicode.core.ui.dialogTextFieldColors
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
@@ -67,6 +70,9 @@ import com.aicode.feature.workspace.domain.model.RemoteConnection
 import com.aicode.feature.workspace.domain.model.RemoteMount
 import com.aicode.feature.workspace.domain.model.RemoteProtocol
 import com.aicode.feature.workspace.domain.remote.RemoteAuth
+import com.aicode.feature.workspace.domain.remote.RemoteDirectoryNames
+import com.aicode.core.theme.Spacing
+import kotlinx.coroutines.launch
 import com.aicode.R
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Check
@@ -458,7 +464,8 @@ fun AddRemoteMountDialog(
     mounts: List<RemoteMount> = emptyList(),
     onDismiss: () -> Unit,
     onAdd: (String, String, String, Boolean) -> Unit,
-    onListDirectories: (String, String, (Boolean, List<String>, String) -> Unit) -> Unit
+    onListDirectories: suspend (String, String) -> Result<List<String>>,
+    onCreateDirectory: suspend (String, String, String) -> Result<String>
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var selectedConnectionId by remember(initialMount) { mutableStateOf(initialMount?.connectionId ?: connections.firstOrNull()?.id ?: "") }
@@ -626,16 +633,19 @@ fun AddRemoteMountDialog(
     }
 
     if (showBrowser) {
-        RemoteDirectoryBrowserDialog(
-            connectionId = selectedConnectionId,
-            initialPath = remotePath.ifBlank { "/" },
-            onPathSelected = {
-                remotePath = it
-                showBrowser = false
-            },
-            onDismiss = { showBrowser = false },
-            listDirectories = onListDirectories
-        )
+        key(selectedConnectionId, remotePath) {
+            RemoteDirectoryBrowserDialog(
+                connectionId = selectedConnectionId,
+                initialPath = remotePath.ifBlank { "/" },
+                onPathSelected = {
+                    remotePath = it
+                    showBrowser = false
+                },
+                onDismiss = { showBrowser = false },
+                listDirectories = onListDirectories,
+                createDirectory = onCreateDirectory
+            )
+        }
     }
 }
 
@@ -645,58 +655,90 @@ fun RemoteDirectoryBrowserDialog(
     initialPath: String,
     onPathSelected: (String) -> Unit,
     onDismiss: () -> Unit,
-    listDirectories: (String, String, (Boolean, List<String>, String) -> Unit) -> Unit
+    listDirectories: suspend (String, String) -> Result<List<String>>,
+    createDirectory: suspend (String, String, String) -> Result<String>
 ) {
-    var currentPath by remember { mutableStateOf(if (initialPath.endsWith("/")) initialPath else "$initialPath/") }
-    var directories by remember { mutableStateOf<List<String>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var currentPath by remember(connectionId, initialPath) { mutableStateOf("${initialPath.trimEnd('/')}/") }
+    var directories by remember(connectionId, initialPath) { mutableStateOf<List<String>>(emptyList()) }
+    var isLoading by remember(connectionId, initialPath) { mutableStateOf(true) }
+    var error by remember(connectionId, initialPath) { mutableStateOf<String?>(null) }
+    var reloadToken by remember(connectionId, initialPath) { mutableStateOf(0) }
+    var showCreateDialog by remember(connectionId, initialPath) { mutableStateOf(false) }
+    var directoryName by remember(connectionId, initialPath) { mutableStateOf("") }
+    var isCreating by remember(connectionId, initialPath) { mutableStateOf(false) }
+    var createError by remember(connectionId, initialPath) { mutableStateOf<String?>(null) }
+    val coroutineScope = rememberCoroutineScope()
+    val unknownError = stringResource(R.string.remote_unknown_error)
 
-    LaunchedEffect(currentPath) {
+    val requestPath = currentPath
+    val requestVersion = reloadToken
+    LaunchedEffect(connectionId, requestPath, requestVersion) {
         isLoading = true
+        directories = emptyList()
         error = null
-        listDirectories(connectionId, currentPath) { success, dirs, msg ->
-            isLoading = false
-            if (success) {
-                directories = dirs.sorted()
-            } else {
-                error = msg
-            }
+        val result = listDirectories(connectionId, requestPath)
+        // 状态变化到重绘之间旧协程仍可能返回；只接受当前路径与刷新版本的结果。
+        if (currentPath != requestPath || reloadToken != requestVersion) return@LaunchedEffect
+        if (result.isSuccess) {
+            directories = result.getOrThrow().sorted()
+        } else {
+            error = result.exceptionOrNull()?.message ?: unknownError
         }
+        isLoading = false
     }
 
     AlertDialog(
         containerColor = MaterialTheme.colorScheme.surface,
         tonalElevation = 0.dp,
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!isCreating) onDismiss() },
         title = { Text(stringResource(R.string.remote_select_remote_dir)) },
         text = {
             Column(modifier = Modifier.fillMaxWidth().heightIn(min = 200.dp, max = 400.dp)) {
                 Text(stringResource(R.string.remote_current_path, currentPath), fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(
+                        enabled = currentPath != "/" && !isCreating,
+                        onClick = {
+                            val parent = currentPath.trimEnd('/').substringBeforeLast('/', "")
+                            currentPath = if (parent.isEmpty()) "/" else "$parent/"
+                            isLoading = true
+                        }
+                    ) { Text(stringResource(R.string.remote_parent_dir)) }
+                    TextButton(
+                        enabled = !isLoading && error == null && !isCreating,
+                        onClick = {
+                            if (isLoading || error != null || isCreating) return@TextButton
+                            directoryName = ""
+                            createError = null
+                            showCreateDialog = true
+                        }
+                    ) { Text(stringResource(R.string.remote_create_dir)) }
+                }
                 val loadError = error
                 if (isLoading) {
                     CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
                 } else if (loadError != null) {
                     Text(stringResource(R.string.remote_load_failed, loadError), color = MaterialTheme.colorScheme.error)
+                    TextButton(onClick = { isLoading = true; reloadToken++ }) {
+                        Text(stringResource(R.string.common_retry))
+                    }
+                } else if (directories.isEmpty()) {
+                    Text(stringResource(R.string.remote_empty_dir), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
                     LazyColumn {
-                        if (currentPath != "/") {
-                            item {
-                                TextButton(onClick = {
-                                    val parent = currentPath.trimEnd('/').substringBeforeLast('/')
-                                    currentPath = if (parent.isEmpty()) "/" else "$parent/"
-                                }) {
-                                    Icon(FeatherIcons.Folder, contentDescription = null)
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(stringResource(R.string.remote_parent_dir))
-                                }
-                            }
-                        }
                         items(directories) { dir ->
-                            TextButton(onClick = {
-                                currentPath = if (currentPath == "/") "/$dir/" else "$currentPath$dir/"
-                            }) {
+                            TextButton(
+                                enabled = !isLoading && !isCreating,
+                                onClick = {
+                                    if (isLoading || isCreating) return@TextButton
+                                    currentPath = "$currentPath$dir/"
+                                    isLoading = true
+                                }
+                            ) {
                                 Icon(FeatherIcons.Folder, contentDescription = null)
                                 Spacer(Modifier.width(8.dp))
                                 Text(dir)
@@ -707,14 +749,88 @@ fun RemoteDirectoryBrowserDialog(
             }
         },
         confirmButton = {
-            Button(onClick = { onPathSelected(currentPath) }) {
+            Button(
+                enabled = !isLoading && error == null && !isCreating && !showCreateDialog,
+                onClick = {
+                    if (!isLoading && error == null && !isCreating && !showCreateDialog) {
+                        onPathSelected(currentPath)
+                    }
+                }
+            ) {
                 Text(stringResource(R.string.remote_confirm_select))
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(enabled = !isCreating, onClick = { if (!isCreating) onDismiss() }) {
                 Text(stringResource(R.string.common_cancel))
             }
         }
     )
+
+    if (showCreateDialog) {
+        val validName = RemoteDirectoryNames.isValid(directoryName)
+        val nameError = if (directoryName.isNotEmpty() && !validName) {
+            stringResource(R.string.remote_directory_name_invalid)
+        } else null
+        AlertDialog(
+            onDismissRequest = { if (!isCreating) showCreateDialog = false },
+            containerColor = MaterialTheme.colorScheme.surface,
+            tonalElevation = 0.dp,
+            title = { Text(stringResource(R.string.remote_create_dir)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    AppTextField(
+                        value = directoryName,
+                        onValueChange = { directoryName = it; createError = null },
+                        label = stringResource(R.string.remote_directory_name),
+                        enabled = !isCreating,
+                        isError = nameError != null || createError != null,
+                        colors = dialogTextFieldColors()
+                    )
+                    val path = if (validName) RemoteDirectoryNames.childPath(currentPath, directoryName) else currentPath
+                    Text(stringResource(R.string.remote_create_dir_path, path), style = MaterialTheme.typography.bodySmall)
+                    val displayedError = nameError ?: createError?.let { stringResource(R.string.remote_create_dir_failed, it) }
+                    if (displayedError != null) {
+                        Text(displayedError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (isCreating) {
+                        CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = validName && !isCreating,
+                    onClick = {
+                        if (isCreating) return@TextButton
+                        isCreating = true
+                        createError = null
+                        val parentPath = currentPath
+                        val name = directoryName
+                        coroutineScope.launch {
+                            try {
+                                val result = createDirectory(connectionId, parentPath, name)
+                                if (result.isSuccess) {
+                                    showCreateDialog = false
+                                    currentPath = "${result.getOrThrow().trimEnd('/')}/"
+                                    isLoading = true
+                                } else {
+                                    createError = result.exceptionOrNull()?.message ?: unknownError
+                                }
+                            } finally {
+                                isCreating = false
+                            }
+                        }
+                    }
+                ) {
+                    Text(stringResource(if (isCreating) R.string.remote_creating_dir else R.string.common_create))
+                }
+            },
+            dismissButton = {
+                TextButton(enabled = !isCreating, onClick = { if (!isCreating) showCreateDialog = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            }
+        )
+    }
 }

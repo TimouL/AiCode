@@ -174,6 +174,9 @@ class SyncEngineIgnoreTest {
         override suspend fun createDirectory(remotePath: String) {
             createdDirs += remotePath
         }
+        override suspend fun createDirectoryExclusive(remotePath: String) {
+            createdDirs += remotePath
+        }
         override suspend fun delete(remotePath: String) = Unit
         override suspend fun isConnected(): Boolean = true
         override suspend fun reconnect(host: String, port: Int, username: String, auth: RemoteAuth) {

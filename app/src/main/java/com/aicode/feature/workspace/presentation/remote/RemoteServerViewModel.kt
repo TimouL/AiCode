@@ -9,6 +9,8 @@ import com.aicode.feature.workspace.domain.model.RemoteConnection
 import com.aicode.feature.workspace.domain.model.RemoteMount
 import com.aicode.feature.workspace.domain.model.RemoteProtocol
 import com.aicode.feature.workspace.domain.remote.RemoteAuth
+import com.aicode.feature.workspace.domain.remote.InvalidRemoteDirectoryNameException
+import com.aicode.feature.workspace.domain.remote.RemoteDirectoryAlreadyExistsException
 import com.aicode.feature.agent.domain.container.RemoteSshConnection
 import com.aicode.feature.agent.domain.container.SshLoginKey
 import com.aicode.feature.agent.domain.container.SshLoginKeyStore
@@ -443,20 +445,25 @@ class RemoteServerViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(pendingHostKey = null)
     }
 
-    fun listRemoteDirectories(
+    suspend fun listRemoteDirectories(
         connectionId: String,
-        path: String,
-        onResult: (Boolean, List<String>, String) -> Unit
-    ) {
-        viewModelScope.launch {
-            val result = repository.listRemoteDirectories(connectionId, path)
-            if (result.isSuccess) {
-                onResult(true, result.getOrNull() ?: emptyList(), "")
-            } else {
-                onResult(false, emptyList(), result.exceptionOrNull()?.message ?: context.getString(R.string.remote_unknown_error))
+        path: String
+    ): Result<List<String>> = localizeDirectoryResult(repository.listRemoteDirectories(connectionId, path))
+
+    suspend fun createRemoteDirectory(connectionId: String, parentPath: String, name: String): Result<String> =
+        localizeDirectoryResult(repository.createRemoteDirectory(connectionId, parentPath, name))
+
+    private fun <T> localizeDirectoryResult(result: Result<T>): Result<T> = result.fold(
+        onSuccess = { Result.success(it) },
+        onFailure = { exception ->
+            val message = when (exception) {
+                is InvalidRemoteDirectoryNameException -> context.getString(R.string.remote_directory_name_invalid)
+                is RemoteDirectoryAlreadyExistsException -> context.getString(R.string.remote_directory_already_exists)
+                else -> exception.message ?: context.getString(R.string.remote_unknown_error)
             }
+            Result.failure(Exception(message, exception))
         }
-    }
+    )
 
     fun setSyncUseGitIgnore(use: Boolean) {
         syncSettingsRepository.setUseGitIgnore(use)

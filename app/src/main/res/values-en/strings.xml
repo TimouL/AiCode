@@ -1579,6 +1579,14 @@
     <string name="remote_load_failed">Load failed: %1$s</string>
     <string name="remote_parent_dir">.. (parent)</string>
     <string name="remote_confirm_select">Confirm Selection</string>
+    <string name="remote_create_dir">New Directory</string>
+    <string name="remote_directory_name">Directory Name</string>
+    <string name="remote_directory_name_invalid">Enter a single directory name other than . or .., without path separators or control characters.</string>
+    <string name="remote_create_dir_path">Create at: %1$s</string>
+    <string name="remote_creating_dir">Creating…</string>
+    <string name="remote_create_dir_failed">Creation failed: %1$s</string>
+    <string name="remote_directory_already_exists">A file or directory with this name already exists. Choose another name.</string>
+    <string name="remote_empty_dir">No subdirectories here</string>
 
     <!-- Remote FTP -->
     <string name="ftp_usage_title">Usage Guide</string>

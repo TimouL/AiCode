@@ -97,6 +97,9 @@ class FtpSyncClient : RemoteSyncClient {
         withContext(Dispatchers.IO) {
             mutex.withLock {
                 val files = ftpClient.listFiles(remotePath) ?: emptyArray()
+                if (!FTPReply.isPositiveCompletion(ftpClient.replyCode)) {
+                    throw IOException("FTP LIST failed: $remotePath, reply=${ftpClient.replyCode} ${ftpClient.replyString.trim()}")
+                }
                 files.map {
                     RemoteFileInfo(
                         name = it.name,
@@ -148,6 +151,15 @@ class FtpSyncClient : RemoteSyncClient {
 
     override suspend fun createDirectory(remotePath: String) =
         withContext(Dispatchers.IO) { mutex.withLock { makeDirectories(remotePath) } }
+
+    override suspend fun createDirectoryExclusive(remotePath: String) =
+        withContext(Dispatchers.IO) {
+            mutex.withLock {
+                if (!ftpClient.makeDirectory(remotePath)) {
+                    throw IOException("FTP MKD failed: $remotePath, reply=${ftpClient.replyCode} ${ftpClient.replyString.trim()}")
+                }
+            }
+        }
 
     /** 逐级建目录（FTP 的 MKD 只建一级），已存在导致的失败忽略。 */
     private fun makeDirectories(path: String) {
