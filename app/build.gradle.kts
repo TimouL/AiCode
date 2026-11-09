@@ -77,7 +77,7 @@ android {
         // 代价：不能上 Google Play。
         targetSdk = 28
         versionCode = gitCommitCount()
-        versionName = "1.0"
+        versionName = "2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
